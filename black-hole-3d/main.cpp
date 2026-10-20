@@ -204,68 +204,7 @@ void main() {
         v  = normalize(v + dt / 6.0 * (k1v + 2.0*k2v + 2.0*k3v + k4v));   // new direction (light keeps speed 1)
 
         // Did this step cross the disk plane (y = 0)?
-        if (pOld.y * p.y < 0.0) {
-            float f = pOld.y / (pOld.y - p.y);       // how far along the step the crossing happened
-            vec3 hp = mix(pOld, p, f);               // exact crossing point
-            float hr = length(hp.xz);                // distance from the center, in the disk plane
-
-            // Only the ring between 3 and 10 Schwarzschild radii is glowing matter
-            if (hr > 3.0 && hr < 10.0) {
-                vec3 orbitDir = cross(vec3(0.0, 1.0, 0.0), hp);   // direction of orbiting matter
-                float doppler = clamp(1.0 + 1.2 * dot(orbitDir, -v) * sqrt(0.5 / hr), 0.2, 3.0);   // blue-shift if moving toward us, red-shift if away
-                
-                float angle = atan(hp.z, hp.x);
-                float logR = log(hr);
-                
-                // Spiral turbulence: multiple scales of rotating structure
-                vec2 uvDisk = vec2(angle * 3.0 - time * 0.25 + logR * 3.0, logR * 9.0 - time * 0.5);
-
-                float clouds = fbm(uvDisk);
-                float detail = fbm(uvDisk * 2.7 + vec2(4.2, 8.1));
-                
-                // Bright turbulent filaments and dark gaps
-                float turbulence = clamp(0.25 + clouds * 1.5 + (detail - 0.5) * 0.9, 0.05, 1.5);
-
-                float temperature = clamp(pow(3.0 / hr, 0.75), 0.0, 1.0); //hotter closer in
-                
-                //------------------------------------------------------------
-                float effectiveTemp = clamp(temperature * doppler, 0.0, 1.0);
-
-                vec3 darkRed = vec3(0.16, 0.012, 0.003);
-                vec3 orange = vec3(1.0, 0.12, 0.015);
-                vec3 yellow = vec3(1.0, 0.48, 0.12);
-                vec3 hotWhite = vec3(1.0, 0.62, 0.32); // less white
-
-
-                vec3 diskColor = mix(darkRed, orange, smoothstep(0.0, 0.4, effectiveTemp));
-                diskColor = mix(diskColor, yellow, smoothstep(0.3, 0.7, effectiveTemp));
-                diskColor = mix(diskColor, hotWhite, smoothstep(0.65, 1.0, effectiveTemp));
-
-                diskColor *= turbulence;
-
-                // Relativistic brightness asymmetry
-                float dopplerBrightness = mix(0.75, 1.3, (doppler - 0.2) / 2.8);
-                diskColor *= dopplerBrightness;
-                
-                //-----------------------------------------------------------
-
-                // Fade the inner and outer edges smoothly
-                float innerEdge = smoothstep(3.0, 3.5, hr);
-                float outerEdge = 1.0 - smoothstep(6.4, 7.0, hr);
-                float edgeFade = innerEdge * outerEdge;
-
-                // Radial brightness falloff
-                float brightness = 0.8 * pow(3.0 / hr, 0.8);
-
-
-                diskColor *= brightness * edgeFade;
-
-                col += trans * diskColor;
-
-                // The disk is optically thick in this approximation
-                trans *= 0.15;
-            }
-        }
+        
     }
 
     // If the ray escaped, add the starry sky behind it (the lensed view)
