@@ -32,11 +32,116 @@ float hash(vec3 p) {
 // Sparse stars so the bending is visible
 // d = direction the ray finally points in
 vec3 background(vec3 d) {
-    vec3 g = d * 80.0;                                   // split the sky into cells
-    float h = hash(floor(g));                            // random value per cell
-    // about 1.5 percent of the cells get a star, drawn as a soft dot
+    vec3 g = d * 80.0;                           
+    float h = hash(floor(g));                    
     float star = step(0.985, h) * smoothstep(0.5, 0.0, length(fract(g) - 0.5));
-    return vec3(0.01, 0.01, 0.03) + star * vec3(1.0, 0.95, 0.85);   // dark blue sky + star
+    
+    return vec3(0.0008, 0.0008, 0.002) + star * vec3(1.0, 0.95, 0.85);   
+}
+
+float hash21(vec2 p){
+    p = fract(p * vec2(123.34, 456.21));
+    p += dot(p, p + 45.32);
+    return fract(p.x * p.y);
+}
+
+float noise2(vec2 p){
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+
+    f = f*f*(3.0 - 2.0 *f);
+
+    float a = hash21(i);
+    float b = hash21(i + vec2(1.0, 0.0));
+    float c = hash21(i + vec2(0.0, 1.0));
+    float d = hash21(i + vec2(1.0, 1.0));
+    
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float hash31(vec3 p) {
+    p = fract(p * 0.1031);
+    p += dot(p, p.yzx + 33.33);
+    return fract(p.x * p.y * p.z);
+}
+
+float noise3(vec3 p) {
+    vec3 i = floor(p);
+    vec3 f = fract(p);
+    
+    float n000 = hash31(i + vec3(0, 0, 0));
+    float n100 = hash31(i + vec3(1, 0, 0));
+    float n010 = hash31(i + vec3(0, 1, 0));
+    float n110 = hash31(i + vec3(1, 1, 0));
+    float n001 = hash31(i + vec3(0, 0, 1));
+    float n101 = hash31(i + vec3(1, 0, 1));
+    float n011 = hash31(i + vec3(0, 1, 1));
+    float n111 = hash31(i + vec3(1, 1, 1));
+
+    vec3 u = f * f * (3.0 - 2.0 * f);
+
+    float x00 = mix(n000, n100, u.x);
+    float x10 = mix(n010, n110, u.x);
+    float x01 = mix(n001, n101, u.x);
+    float x11 = mix(n011, n111, u.x);
+
+    float y0 = mix(x00, x10, u.y);
+    float y1 = mix(x01, x11, u.y);
+
+    return mix(y0, y1, u.z);
+}
+
+vec3 ACESFilm(vec3 x) {
+    float a = 2.51;
+    float b = 0.03;
+    float c = 2.43;
+    float d = 0.59;
+    float e = 0.14;
+    return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
+}
+
+float fbm(vec2 p){
+    float f = 0.0;
+    float amplitude = 0.5;
+    
+    for (int i = 0; i < 5; i++){
+        f += amplitude * noise2(p);
+        p = p* 2.0 + vec2(1.0, 1.0);
+        amplitude *= 0.5;
+    }
+    return f;
+}
+
+float gasDensity(vec3 p) {
+    float r = length(p);
+    
+    float innerRadius = 3.0;
+    float outerRadius = 10.0;
+
+    if (r < innerRadius || r > outerRadius) {
+        return 0.0; // Outside the disk region
+    }
+
+    float height = 0.025 * r + 0.04;; // Thickness of the disk increases with radius
+    
+    float verticalDensity = exp(-(p.y * p.y) / (2.0 * height * height)); // Gaussian falloff in y-direction
+
+    float innerFade = smoothstep(innerRadius, innerRadius + 0.5, r);
+    float outerFade = 1.0 - smoothstep(outerRadius - 1.0, outerRadius, r);
+       
+    float radialDensity = pow(3.0 / r, 0.7);
+    
+    float innerStructure = smoothstep(3.0, 4.0, r);
+    radialDensity *= innerStructure;
+    
+    float largeClouds = noise3(p * 0.35);
+    float mediumClouds = noise3(p * 0.8);
+    float fineDetail = noise3(p * 1.6);
+
+    float gasNoise = largeClouds * 0.55 + mediumClouds * 0.30 + fineDetail * 0.15;
+    radialDensity *= 0.85 + 0.3 * gasNoise; //Add
+    
+    return radialDensity * verticalDensity * innerFade * outerFade;
 }
 
 // Acceleration of a light ray near a Schwarzschild black hole at the origin.
@@ -59,6 +164,9 @@ void main() {
     vec3 col = vec3(0.0);       // accumulated color
     float trans = 1.0;          // how much light still passes through (1 = fully clear)
     bool hit = false;           // did the ray fall into the black hole?
+    
+    float gasTransmittance = 1.0;
+    vec3 gasColor = vec3(0.0);
 
     // Step the ray forward through curved space
     for (int i = 0; i < 600; i++) {
@@ -66,10 +174,26 @@ void main() {
         if (r < 1.0) { hit = true; break; }               // inside the event horizon: captured
         if (r > 80.0 && dot(p, v) > 0.0) break;           // far away and moving outward: escaped
 
+        float photonRing = exp(-pow(r - 2.6, 2.0) * 8.0);
+        col += trans * vec3(1.0, 0.6, 0.2) * photonRing * 0.05;
+
         vec3 pOld = p;                                    // remember position for the disk test
 
         // Small steps near the black hole, big steps far away
         float dt = clamp(0.05 * r, 0.02, 1.0);
+           
+        float density = gasDensity(p);
+        
+        if (density > 0.001) {
+            float temperature = clamp(pow(3.0 / max(r, 3.0), 0.75), 0.0, 1.0); // hotter closer in
+
+            vec3 gasEmmission = mix(vec3(0.25, 0.015, 0.002), vec3(1.0, 0.55, 0.18), temperature); // dark red to hot white
+            
+            float stepOpacity = 1.0 - exp(-density * dt * 0.6); // scale factor for opacity
+            
+            gasColor += gasTransmittance * gasEmmission * stepOpacity; // accumulate color
+            gasTransmittance *= 1.0 - stepOpacity; // update transmittance
+        }
 
         // RK4: sample the curvature 4 times, then average for an accurate step
         vec3 k1p = v,                 k1v = accel(p, v);
@@ -87,28 +211,75 @@ void main() {
 
             // Only the ring between 3 and 10 Schwarzschild radii is glowing matter
             if (hr > 3.0 && hr < 10.0) {
-                // Doppler beaming: matter moving toward the camera looks brighter
-                vec3 orbitDir = normalize(cross(vec3(0.0, 1.0, 0.0), hp));   // direction the matter orbits
-                float doppler = clamp(1.0 + 1.2 * dot(orbitDir, -v) * sqrt(0.5 / hr), 0.2, 3.0);
+                vec3 orbitDir = cross(vec3(0.0, 1.0, 0.0), hp);   // direction of orbiting matter
+                float doppler = clamp(1.0 + 1.2 * dot(orbitDir, -v) * sqrt(0.5 / hr), 0.2, 3.0);   // blue-shift if moving toward us, red-shift if away
+                
+                float angle = atan(hp.z, hp.x);
+                float logR = log(hr);
+                
+                // Spiral turbulence: multiple scales of rotating structure
+                vec2 uvDisk = vec2(angle * 3.0 - time * 0.25 + logR * 3.0, logR * 9.0 - time * 0.5);
 
-                float t = 3.0 / hr;                  // 1 at the inner edge, smaller further out
+                float clouds = fbm(uvDisk);
+                float detail = fbm(uvDisk * 2.7 + vec2(4.2, 8.1));
+                
+                // Bright turbulent filaments and dark gaps
+                float turbulence = clamp(0.25 + clouds * 1.5 + (detail - 0.5) * 0.9, 0.05, 1.5);
 
-                // Swirl pattern: inner parts rotate faster than outer parts
-                float ang = atan(hp.z, hp.x) - time * 1.5 / (hr * sqrt(hr));
-                float swirl = 0.6 + 0.4 * sin(ang * 6.0 + hr * 3.0);
+                float temperature = clamp(pow(3.0 / hr, 0.75), 0.0, 1.0); //hotter closer in
+                
+                //------------------------------------------------------------
+                float effectiveTemp = clamp(temperature * doppler, 0.0, 1.0);
 
-                // Color: orange outside, white-hot inside, then brightness and Doppler applied
-                vec3 diskCol = mix(vec3(1.0, 0.3, 0.05), vec3(1.0, 0.9, 0.7), t)
-                               * (t + 0.2) * 2.0 * swirl * pow(doppler, 3.0);
+                vec3 darkRed = vec3(0.16, 0.012, 0.003);
+                vec3 orange = vec3(1.0, 0.12, 0.015);
+                vec3 yellow = vec3(1.0, 0.48, 0.12);
+                vec3 hotWhite = vec3(1.0, 0.62, 0.32); // less white
 
-                col += trans * 0.85 * diskCol;       // add the disk's light
-                trans *= 0.15;                       // the disk blocks most of what is behind it
+
+                vec3 diskColor = mix(darkRed, orange, smoothstep(0.0, 0.4, effectiveTemp));
+                diskColor = mix(diskColor, yellow, smoothstep(0.3, 0.7, effectiveTemp));
+                diskColor = mix(diskColor, hotWhite, smoothstep(0.65, 1.0, effectiveTemp));
+
+                diskColor *= turbulence;
+
+                // Relativistic brightness asymmetry
+                float dopplerBrightness = mix(0.75, 1.3, (doppler - 0.2) / 2.8);
+                diskColor *= dopplerBrightness;
+                
+                //-----------------------------------------------------------
+
+                // Fade the inner and outer edges smoothly
+                float innerEdge = smoothstep(3.0, 3.5, hr);
+                float outerEdge = 1.0 - smoothstep(6.4, 7.0, hr);
+                float edgeFade = innerEdge * outerEdge;
+
+                // Radial brightness falloff
+                float brightness = 0.8 * pow(3.0 / hr, 0.8);
+
+
+                diskColor *= brightness * edgeFade;
+
+                col += trans * diskColor;
+
+                // The disk is optically thick in this approximation
+                trans *= 0.15;
             }
         }
     }
 
     // If the ray escaped, add the starry sky behind it (the lensed view)
-    if (!hit) col += trans * background(normalize(v));
+    col += gasColor;
+
+    // Si el rayo escapó, añadimos el fondo estrellado
+    if (!hit) {
+        col += gasTransmittance * background(normalize(v));
+    }
+
+    // Aplicamos Tone Mapping y Corrección Gamma
+    col = ACESFilm(col);
+    col = pow(col, vec3(1.0 / 2.2));
+
     color = vec4(col, 1.0);
 }
 )";
@@ -207,9 +378,9 @@ int main() {
         // Draw the quad: the fragment shader runs for every pixel
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
-        glfwSwapBuffers(w);                                      // show the finished frame
-        glfwPollEvents();                                        // handle mouse and keyboard
-        if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) break; // Esc closes the program
+        glfwSwapBuffers(w);
+        glfwPollEvents();
+        if (glfwGetKey(w, GLFW_KEY_ESCAPE) == GLFW_PRESS) break;
     }
     glfwTerminate();
 }
